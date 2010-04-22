@@ -3,7 +3,7 @@
 
 # A color analysis script to help you label your store's products with color data
 # automagically. It will take either a single file or scour an entire folder for
-# folders of images and do each one individually printing a summary of what it 
+# folders of images and do each one individually printing a summary of what it
 # thinks is the correct color value. A work in progress...
 #
 #    ~jaymz | @jaymzcampbell | jaymz.eu
@@ -18,7 +18,9 @@ import glob
 import sys
 import colorsys
 import re
+from copy import copy
 from operator import itemgetter
+from decimal import Decimal
 
 # Pixels will be first compared to these values before being
 # added to the data list of color information on the first pass
@@ -38,30 +40,65 @@ COLOR = ['RED', 'ORANGE', 'YELLOW',
     ]
 TONE = ['DARK', '', 'BRIGHT']
 
+def trimFloat(val, places=2):
+    return float(repr(val)[0:places+2])
+
+def withinBounds(allowance, _rgb):
+    rgb = copy(_rgb)
+    diff = 0
+    allowance = Decimal(repr(allowance))
+    for c in rgb:
+        for d in rgb:
+            dec_d = Decimal(repr(d)).quantize(allowance)
+            dec_c = Decimal(repr(c)).quantize(allowance)
+
+            diff = abs(dec_d-dec_c)
+
+            if (d != c) and diff>allowance:
+                return False
+    return True
+
 def processImage(i, name=None):
   """ Scales down the image, blurs it to ease the blending of the color values
   and reduce spikes from anomolies. It then samples pixels creating a list of
   colors. This list is then looped over to build counts which are placed into
   bins of 30° hue's seperated into three based on their value. Pixels less than
   a certain saturation are discarded. """
-  
+
   i = i.resize((200,200))
   i = i.convert("RGB")
   i = i.filter(ImageFilter.BLUR)
   d = i.getdata()
   cnt = 0
+
   h = [] #holds the hsv info
+  grays = [] #holds just gray content
+  black_count = 0
+  white_count = 0
+  total_samples = 0
+
   for p in d:
       cnt = cnt + 1
       if cnt == 4: #take every 4th pixel
         if p[0]>LBOUND and p[1]>LBOUND and p[2]>LBOUND and p[0]<UBOUND and p[1]<UBOUND and p[2]<UBOUND:
-            if p[0] != p[1] != p[2]:
-                r = float(p[0])/255
-                g = float(p[1])/255
-                b = float(p[2])/255
+            r = trimFloat(float(p[0])/255)
+            g = trimFloat(float(p[1])/255)
+            b = trimFloat(float(p[2])/255)
+
+            if not withinBounds(0.02, (r,g,b)):
                 h.append(colorsys.rgb_to_hsv(r,g,b))
+            else:
+                if (r+g+b)/3>0.92:
+                    white_count += 1
+                elif (r+g+b)/3<0.14:
+                    black_count += 1
+                else:
+                    grays.append(colorsys.rgb_to_hsv(r,g,b))
+            total_samples += 1
         cnt = 0 #reset sample counter
+
   h.sort()
+  grays.sort()
   bin_width = 30 # size of hue slices (degress)
   max_bin = 360
 
@@ -81,11 +118,11 @@ def processImage(i, name=None):
             mids[bin_number] += 1
         else:
             lites[bin_number] += 1
-        print "HUE BIN: %s VALUE : %d" % (int(hue)/bin_width, int(hue))
+        #print "HUE BIN: %s VALUE : %d" % (int(hue)/bin_width, int(hue))
 
   c = 0
   data = zip(darks, mids, lites)
-  
+
   for x in data:
       print '%s : %s %d°' % (COLOR[c], x, c*bin_width)
       c += 1
@@ -93,10 +130,17 @@ def processImage(i, name=None):
   max_idxs = (darks.index(max(darks)), mids.index(max(mids)), lites.index(max(lites)))
   max_counts = (darks[max_idxs[0]], mids[max_idxs[1]], lites[max_idxs[2]])
   print "\nMax→ Indexes: %s Values: %s" % (max_idxs, max_counts)
-  
+
   tone = max_counts.index(max(max_counts))
   max_hbin = max_idxs[tone]
   print "Dominant Hue: %s %s" % (TONE[tone], COLOR[max_hbin])
+
+  gray_total = [(g[0]+g[1]+g[2])/3 for g in grays]
+  gray_average = reduce(lambda x,y : x+y, gray_total)/len(gray_total)
+
+  print "Average Gray: %s (samples: %0.1f%%), White count: %s, Black count: %s" % (gray_average, (len(gray_total)/float(total_samples))*100, white_count, black_count)
+
+  print "Total samples taken: %s" % total_samples
 
 # Helper functions follow along with __main__ def
 
@@ -124,6 +168,6 @@ if __name__ == "__main__":
             processFile(sys.argv[1])
     except IndexError:
         processFolder(FOLDER)
-        
-    
-        
+
+
+
